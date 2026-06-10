@@ -1,4 +1,4 @@
-.PHONY: dev-server dev-web build-server build-web start-web docker-up docker-down test-server test-server-e2e test-web test-e2e
+.PHONY: dev-server dev-web build-server build-web start-web docker-up docker-down test-server test-server-e2e test-web test-e2e install-hooks
 
 dev-server:
 	cd server && go run ./cmd/server
@@ -32,3 +32,7 @@ test-web:
 
 test-e2e:
 	cd apps/web && npm run test:e2e
+
+install-hooks:
+	pre-commit install
+	pre-commit install --hook-type commit-msg

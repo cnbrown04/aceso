@@ -2,6 +2,31 @@
 
 This file is the single source of truth for any agent (AI or human) working in this repository. Read it before touching anything. The full detail behind each rule lives in `docs/conventions.md`.
 
+## First-time setup
+
+Install `pre-commit` (once per machine), then install the hooks into your clone:
+
+```bash
+brew install pre-commit   # or: pip install pre-commit
+make install-hooks
+```
+
+This enables two hooks:
+- **pre-commit** — gitleaks scans staged files for secrets before every commit
+- **commit-msg** — gitlint rejects commits whose message does not follow Conventional Commits
+
+**Conventional Commits format:** `<type>(<scope>): <description>`
+
+```
+feat(ios): add recovery dashboard
+fix: handle nil session on startup
+chore(ci)!: drop Node 18 support
+```
+
+Allowed types: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert` `style` `test`
+
+Configuration lives in `.gitlint` at the repo root.
+
 ---
 
 ## What this project is

@@ -174,6 +174,15 @@ To create one, copy `addons/_template/` and fill in `addon.json`. See `docs/addo
 
 Read `AGENTS.md` before opening a PR. It covers naming rules, import order, testing requirements, and CI security rules that all contributions must follow.
 
+After cloning, install the pre-commit hooks:
+
+```bash
+brew install pre-commit
+make install-hooks
+```
+
+This sets up secret scanning (gitleaks) on every commit and enforces Conventional Commits on every commit message.
+
 For bugs and feature requests, use the issue templates.
 
 ---

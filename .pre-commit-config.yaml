@@ -1,0 +1,16 @@
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  # Secret detection — scans staged files for credentials, tokens, and keys
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Conventional Commits enforcement on the commit message
+  - repo: https://github.com/jorisroovers/gitlint
+    rev: v0.19.1
+    hooks:
+      - id: gitlint
+        stages: [commit-msg]
+        args: ["--msg-filename"]

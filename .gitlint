@@ -1,0 +1,7 @@
+[general]
+# Body and sign-off are optional — only the title is enforced.
+ignore = body-is-missing,body-changed-file-mention
+contrib = contrib-title-conventional-commits
+
+[contrib-title-conventional-commits]
+types = build,chore,ci,docs,feat,fix,perf,refactor,revert,style,test
