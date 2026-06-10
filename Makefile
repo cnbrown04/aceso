@@ -1,4 +1,4 @@
-.PHONY: dev-server dev-web build-server build-web start-web docker-up docker-down test-server
+.PHONY: dev-server dev-web build-server build-web start-web docker-up docker-down test-server test-server-e2e test-web test-e2e
 
 dev-server:
 	cd server && go run ./cmd/server
@@ -23,3 +23,12 @@ docker-down:
 
 test-server:
 	cd server && go test ./...
+
+test-server-e2e:
+	cd server && go test -tags=e2e ./e2e/...
+
+test-web:
+	cd apps/web && npm test
+
+test-e2e:
+	cd apps/web && npm run test:e2e

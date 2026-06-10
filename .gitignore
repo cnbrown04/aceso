@@ -6,6 +6,10 @@ server/vendor/
 node_modules/
 apps/web/dist/
 
+# Playwright
+apps/web/playwright-report/
+apps/web/test-results/
+
 # Xcode / Swift
 *.xcworkspace/xcuserdata/
 *.xcuserstate

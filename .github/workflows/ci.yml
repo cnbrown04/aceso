@@ -5,33 +5,194 @@ on:
     branches: [main]
   pull_request:
 
+# Deny all permissions at the workflow level.
+# Each job grants only what it actually needs.
+# This limits blast radius if any step is compromised.
+permissions:
+  contents: read
+
 jobs:
+  # -----------------------------------------------------------------------
+  # Go — unit tests
+  # -----------------------------------------------------------------------
   server:
-    name: Go
+    name: Go (unit)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.23"
+          cache-dependency-path: server/go.sum
+
       - run: go build ./...
       - run: go test ./...
 
-  web:
-    name: Web
+  # -----------------------------------------------------------------------
+  # Go — e2e tests
+  # -----------------------------------------------------------------------
+  server-e2e:
+    name: Go (e2e)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: server/go.sum
+
+      - run: go test -tags=e2e ./e2e/...
+
+  # -----------------------------------------------------------------------
+  # Web — build + unit tests
+  # -----------------------------------------------------------------------
+  web:
+    name: Web (build + unit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          # Prefix cache key with repo name to prevent cross-fork cache poisoning.
+          # See: https://tanstack.com/blog/npm-supply-chain-compromise-postmortem
+          cache-dependency-path: apps/web/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  # -----------------------------------------------------------------------
+  # Web — Playwright e2e
+  # -----------------------------------------------------------------------
+  playwright:
+    name: Web (e2e)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # required to post the test summary comment
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
+
       - run: npm ci
-      - run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Run Playwright tests
+        run: npm run test:e2e
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 14
+
+      - name: Comment test summary on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: daun/playwright-report-summary@1229105480a2a4bdd91598d8a146fbab41343fce # v3
+        with:
+          report-file: apps/web/playwright-report/results.json
+
+  # -----------------------------------------------------------------------
+  # iOS — unit + UI tests
+  #
+  # macOS runners cost 10× more than Linux runners on GitHub Actions.
+  # These jobs only run on push to main and on PRs to keep costs down.
+  # Adjust the `on` triggers above if you want a different policy.
+  # -----------------------------------------------------------------------
+  ios-unit:
+    name: iOS (unit)
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project apps/ios/Aceso.xcodeproj \
+            -scheme Aceso \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:AcesoTests \
+            -resultBundlePath ios-unit-results.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-unit-results
+          path: ios-unit-results.xcresult
+          retention-days: 14
+
+  ios-ui:
+    name: iOS (UI)
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run UI tests
+        run: |
+          xcodebuild test \
+            -project apps/ios/Aceso.xcodeproj \
+            -scheme Aceso \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:AcesoUITests \
+            -resultBundlePath ios-ui-results.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-ui-results
+          path: ios-ui-results.xcresult
+          retention-days: 14

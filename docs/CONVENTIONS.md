@@ -29,19 +29,21 @@ These names are dictated by a tool and cannot be changed without breaking someth
 
 | File or folder | Forced by | Why it can't change |
 |---|---|---|
+| `README.md` | GitHub | Rendered automatically at repo/folder root |
+| `AGENTS.md` | AI agent convention | Agents look for this exact name |
+| `Makefile` | make toolchain | `make` looks for this exact name |
+| `Dockerfile` | Docker | Docker looks for this exact name |
 | `Package.swift` | Swift Package Manager | SPM looks for this exact filename |
 | `go.mod`, `go.sum` | Go toolchain | Required by spec |
 | `main.go` | Go entry point convention | `go run ./cmd/server` expects this |
+| `*_test.go` | Go toolchain | The `_test.go` suffix identifies test files |
 | `package.json` | npm | Required by spec |
 | `__root.tsx` | TanStack Router | Router codegen looks for this name |
 | `routeTree.gen.ts` | TanStack Router codegen | Auto-generated, name is hardcoded |
 | `vite.config.ts`, `tsconfig.json`, `tsr.config.json` | Tool config | Each tool looks for these exact names |
+| `playwright.config.ts` | Playwright | Playwright looks for this exact name |
 | `Aceso/`, `AcesoTests/`, `AcesoUITests/` | Xcode `.xcodeproj` | Folder paths are hardcoded in `project.pbxproj` |
 | `Aceso.xcodeproj/` | Xcode | The project file itself |
-
-### Files that look forced but aren't
-
-Xcode generates `AcesoApp.swift`, `ContentView.swift`, `AcesoTests.swift`, `AcesoUITests.swift`, and `AcesoUITestsLaunchTests.swift` with PascalCase names, but these are **not** referenced by filename in `project.pbxproj` — Xcode tracks files by UUID. They can be renamed using Xcode's **Refactor → Rename** on the type name, which renames the file in sync. These should be renamed to `kebab-case` when convenient.
 
 ---
 
