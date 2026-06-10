@@ -1,0 +1,80 @@
+name: Bug report
+description: Something isn't working correctly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing a bug, check if there's already an open issue for it.
+        Include as much detail as you can — vague reports are hard to act on.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "When I do X, Y happens instead of Z."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps needed to trigger the bug.
+      placeholder: |
+        1. Go to ...
+        2. Click on ...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which part of Aceso is affected?
+      multiple: true
+      options:
+        - iOS app
+        - Web dashboard
+        - Go server
+        - Addon
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Aceso version or commit
+      placeholder: "e.g. v0.2.1 or abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Environment
+      multiple: true
+      options:
+        - Docker (Linux)
+        - macOS (native)
+        - iOS Simulator
+        - iOS device
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output
+      description: Paste any server logs, crash reports, or console output.
+      render: text
