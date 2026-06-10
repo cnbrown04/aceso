@@ -14,7 +14,7 @@ apps/web/test-results/
 *.xcworkspace/xcuserdata/
 *.xcuserstate
 *.xcuserdata/
-.build/
+**/.build/
 DerivedData/
 apps/ios/Aceso.xcodeproj/xcuserdata/
 apps/ios/Aceso.xcodeproj/project.xcworkspace/xcuserdata/
