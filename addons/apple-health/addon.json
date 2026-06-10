@@ -1,0 +1,12 @@
+{
+  "id": "apple-health",
+  "name": "Apple Health",
+  "version": "0.1.0",
+  "description": "Writes recovery, strain, and sleep metrics to Apple HealthKit after each sync.",
+  "platforms": ["ios"],
+  "hooks": {
+    "ios": "Registers with AddonLoader and requests HealthKit write authorisation on first activation. Writes HKQuantitySample values for each metric type after every data sync."
+  },
+  "aceso": "0.1.0",
+  "author": ""
+}

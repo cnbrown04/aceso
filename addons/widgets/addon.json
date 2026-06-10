@@ -1,0 +1,12 @@
+{
+  "id": "widgets",
+  "name": "Widgets",
+  "version": "0.1.0",
+  "description": "Adds iOS home-screen and lock-screen widgets showing current recovery score and strain.",
+  "platforms": ["ios"],
+  "hooks": {
+    "ios": "Registers with AddonLoader and calls WidgetCenter.reloadAllTimelines() on activation so widgets reflect the latest synced data."
+  },
+  "aceso": "0.1.0",
+  "author": ""
+}

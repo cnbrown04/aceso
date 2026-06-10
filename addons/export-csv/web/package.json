@@ -1,0 +1,11 @@
+{
+  "name": "@aceso/addon-export-csv",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "dependencies": {},
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

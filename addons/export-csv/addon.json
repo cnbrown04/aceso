@@ -1,0 +1,12 @@
+{
+  "id": "export-csv",
+  "name": "Export CSV",
+  "version": "0.1.0",
+  "description": "Adds an Export CSV button to the web dashboard that downloads all stored metrics as a flat CSV file.",
+  "platforms": ["web"],
+  "hooks": {
+    "web": "Registers via addon-loader.ts. Exports an ExportPanel component that can be mounted anywhere in the dashboard. Calls GET /api/export/csv on the server."
+  },
+  "aceso": "0.1.0",
+  "author": ""
+}

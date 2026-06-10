@@ -1,0 +1,12 @@
+{
+  "id": "notifications",
+  "name": "Notifications",
+  "version": "0.1.0",
+  "description": "Fires outbound webhook requests when recovery drops below a configurable threshold.",
+  "platforms": ["server"],
+  "hooks": {
+    "server": "Registers with addon-loader.go and mounts POST /api/webhooks/notifications. Subscribes to the ingest pipeline and triggers configured webhook URLs when the recovery score crosses the threshold."
+  },
+  "aceso": "0.1.0",
+  "author": ""
+}

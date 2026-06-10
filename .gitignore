@@ -1,0 +1,26 @@
+# Go
+bin/
+server/vendor/
+
+# Node
+node_modules/
+apps/web/dist/
+
+# Xcode / Swift
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+*.xcuserdata/
+.build/
+DerivedData/
+apps/ios/Aceso.xcodeproj/xcuserdata/
+apps/ios/Aceso.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Env
+.env
+.env.local
+
+# Claude Code
+.claude/
+
+# macOS
+.DS_Store

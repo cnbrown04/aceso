@@ -1,0 +1,14 @@
+{
+  "id": "addon-name",
+  "name": "Addon Name",
+  "version": "0.1.0",
+  "description": "One or two sentences describing what problem this addon solves.",
+  "platforms": ["ios", "web", "server"],
+  "hooks": {
+    "ios": "Describe what it registers or activates in AddonLoader.",
+    "web": "Describe what it adds at build time via addon-loader.ts.",
+    "server": "Describe what routes or services it registers via addon-loader.go."
+  },
+  "aceso": "0.1.0",
+  "author": ""
+}
