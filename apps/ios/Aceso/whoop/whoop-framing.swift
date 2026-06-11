@@ -126,56 +126,77 @@ struct WhoopReassembler {
     private var buffer: [UInt8] = []
     let family: WhoopDeviceFamily
 
+    /// Number of bytes currently buffered (waiting for a complete frame).
+    var bufferCount: Int { buffer.count }
+
+    /// Declared total byte count of the next frame, if we have enough header bytes to know it.
+    var declaredTotal: Int? {
+        guard let sofIdx = buffer.firstIndex(of: 0xAA), sofIdx == 0 else { return nil }
+        switch family {
+        case .whoop4:
+            guard buffer.count >= 4 else { return nil }
+            let length = Int(buffer[1]) | (Int(buffer[2]) << 8)
+            return (length >= 7 && length <= 4096) ? length + 4 : nil
+        case .whoop5:
+            guard buffer.count >= 4 else { return nil }
+            let dl = Int(buffer[2]) | (Int(buffer[3]) << 8)
+            return (dl >= 4 && dl <= 4096) ? dl + 8 : nil
+        }
+    }
+
     init(family: WhoopDeviceFamily) {
         self.family = family
     }
 
-    /// Feed a raw BLE notification chunk; returns zero or more complete verified frames.
-    mutating func feed(_ chunk: [UInt8]) -> [[UInt8]] {
+    /// Feed a raw BLE notification chunk; returns complete verified frames and count of CRC-failed discards.
+    mutating func feed(_ chunk: [UInt8]) -> (frames: [[UInt8]], crcFailures: Int) {
         buffer.append(contentsOf: chunk)
         return drain()
     }
 
     mutating func reset() { buffer.removeAll() }
 
-    private mutating func drain() -> [[UInt8]] {
+    private mutating func drain() -> (frames: [[UInt8]], crcFailures: Int) {
         var frames: [[UInt8]] = []
+        var crcFailures = 0
         while true {
-            guard let (frame, consumed) = nextFrame() else { break }
+            guard let (frame, consumed, crcFailed) = nextFrame() else { break }
             buffer.removeFirst(consumed)
             if let f = frame { frames.append(f) }
+            if crcFailed { crcFailures += 1 }
         }
-        return frames
+        return (frames, crcFailures)
     }
 
-    /// Returns (frame, bytesConsumed) or nil if there are not enough bytes yet.
-    /// frame is nil if the candidate was corrupt (bytes were consumed but discarded).
-    private func nextFrame() -> (frame: [UInt8]?, consumed: Int)? {
+    /// Returns (frame, bytesConsumed, crcFailed) or nil if there are not enough bytes yet.
+    /// frame is nil if the candidate was corrupt (bytes consumed and discarded).
+    private func nextFrame() -> (frame: [UInt8]?, consumed: Int, crcFailed: Bool)? {
+        guard !buffer.isEmpty else { return nil }  // empty buffer — nothing to parse
         guard let sofIdx = buffer.firstIndex(of: 0xAA) else {
-            return (nil, buffer.count)  // no SOF anywhere — discard everything
+            return (nil, buffer.count, false)  // no SOF anywhere — discard everything
         }
-        if sofIdx > 0 { return (nil, sofIdx) }  // skip bytes before SOF
+        if sofIdx > 0 { return (nil, sofIdx, false) }  // skip bytes before SOF
 
         switch family {
         case .whoop4:
             guard buffer.count >= 4 else { return nil }
             let length = Int(buffer[1]) | (Int(buffer[2]) << 8)
-            guard length >= 7, length <= 4096 else { return (nil, 1) }
+            guard length >= 7, length <= 4096 else { return (nil, 1, false) }
             let total = length + 4
             guard buffer.count >= total else { return nil }
             let frame = Array(buffer[0..<total])
             let check = verifyWhoopFrame4(frame)
-            return (check.ok ? frame : nil, total)
+            return (check.ok ? frame : nil, total, !check.ok)
 
         case .whoop5:
             guard buffer.count >= 4 else { return nil }
             let declaredLength = Int(buffer[2]) | (Int(buffer[3]) << 8)
-            guard declaredLength >= 4, declaredLength <= 4096 else { return (nil, 1) }
+            guard declaredLength >= 4, declaredLength <= 4096 else { return (nil, 1, false) }
             let total = declaredLength + 8
             guard buffer.count >= total else { return nil }
             let frame = Array(buffer[0..<total])
             let check = verifyWhoopFrame5(frame)
-            return (check.ok ? frame : nil, total)
+            return (check.ok ? frame : nil, total, !check.ok)
         }
     }
 }

@@ -14,7 +14,7 @@ enum WhoopCommand: UInt8 {
     case getBatteryLevel      = 26
     case getDataRange         = 34
     case getHello             = 35
-    case exitHighFreqSync     = 97  // sent defensively on connect to release a stuck strap
+    case exitHighFreqSync     = 97  // watchdog-recovery only — NOT sent in normal connect handshake
     case getExtendedBatteryInfo = 98
 
     /// COMMAND packet type byte (0x23 = 35) used in the inner bytes of every command frame.

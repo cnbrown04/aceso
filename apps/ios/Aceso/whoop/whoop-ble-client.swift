@@ -22,7 +22,7 @@ enum WhoopConnectionState: Equatable {
 @Observable
 final class WhoopBLEClient: NSObject {
 
-    // MARK: - Observable state
+    // MARK: - Observable state (MainActor)
 
     var connectionState: WhoopConnectionState = .idle
     var liveHR: Int?
@@ -31,41 +31,64 @@ final class WhoopBLEClient: NSObject {
     /// Non-nil when a problem requires user action. Cleared on successful bond or `retry()`.
     var connectionError: String?
 
-    // MARK: - Callbacks
+    // MARK: - Historical sync state (MainActor)
+
+    var syncToast: AcesoSyncToast?
+    var isHistoricalSyncing: Bool = false
+    var historicalPacketCount: Int = 0
+
+    // MARK: - Callbacks (MainActor)
 
     /// Called when a batch of samples is ready to persist or upload.
     var onSamples: ((WhoopSampleBatch) -> Void)?
     /// Called with raw historical data frames for deeper decoding.
     var onHistoricalFrame: (([UInt8]) -> Void)?
 
-    // MARK: - Private state
+    // MARK: - Immutable identity (nonisolated — safe to read from any queue)
 
-    private let family: WhoopDeviceFamily
-    private let log = Logger(subsystem: "com.aceso", category: "whoop-ble")
+    nonisolated let family: WhoopDeviceFamily
+
+    // Per-subsystem loggers — each prefixes output for easy grep in Console.app
+    nonisolated private let logConnect  = Logger(subsystem: "com.aceso", category: "ble.connect")
+    nonisolated private let logChar     = Logger(subsystem: "com.aceso", category: "ble.char")
+    nonisolated private let logNotify   = Logger(subsystem: "com.aceso", category: "ble.notify")
+    nonisolated private let logFrame    = Logger(subsystem: "com.aceso", category: "ble.frame")
+    nonisolated private let logSync     = Logger(subsystem: "com.aceso", category: "ble.sync")
+    nonisolated private let logWrite    = Logger(subsystem: "com.aceso", category: "ble.write")
+
+    // MARK: - BLE processing queue
+    //
+    // All CoreBluetooth callbacks arrive on bleQueue. Heavy work (reassembly, CRC
+    // verification, frame decoding) stays here. Only the final observable-state
+    // mutations dispatch back to @MainActor.
+
+    private let bleQueue = DispatchQueue(label: "com.aceso.ble", qos: .utility)
+
+    // MARK: - MainActor state
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var cmdChar: CBCharacteristic?
     private var seq: UInt8 = 0
-    private var reassembler: WhoopReassembler
-    private var pendingBatch = WhoopSampleBatch(deviceID: "", hrSamples: [], rrIntervals: [], batterySamples: [])
     private var batchFlushTimer: Timer?
-
-    // Prevents re-entering the connect handshake on every .withResponse ACK (bond write, history
-    // acks, etc.). Without this, onBonded() re-fires in a storm that stops the strap from streaming.
     private var connectHandshakeDone = false
     private var scanTimeoutWork: DispatchWorkItem?
     private var connectTimeoutWork: DispatchWorkItem?
-    // Counts attempts where the WHOOP was found but didConnect never fired (filter-list rejection).
-    // After 2 consecutive timeouts, connectionError is set and auto-retry stops.
     private var consecutiveConnectTimeouts = 0
-
-    // MARK: - Characteristic references
-
     private var pendingNotifyChars: [CBCharacteristic] = []
-    private var notifyChars: [String: CBCharacteristic] = [:]
-    private var hrChar: CBCharacteristic?
-    private var batteryChar: CBCharacteristic?
+    private var syncClearWorkItem: DispatchWorkItem?
+
+    // MARK: - bleQueue-only state
+    //
+    // These are accessed exclusively from bleQueue (a serial queue), so nonisolated(unsafe)
+    // is safe — the serial queue provides the necessary mutual exclusion.
+
+    nonisolated(unsafe) private var reassembler: WhoopReassembler
+    nonisolated(unsafe) private var pendingBatch = WhoopSampleBatch(
+        deviceID: "", hrSamples: [], rrIntervals: [], batterySamples: [])
+    nonisolated(unsafe) private var pendingDeviceID: String = ""
+    nonisolated(unsafe) private var historicalPacketCountBuffer: Int = 0
+    nonisolated(unsafe) private var historicalIdleWorkItem: DispatchWorkItem?
 
     // MARK: - Init
 
@@ -73,18 +96,24 @@ final class WhoopBLEClient: NSObject {
         self.family = family
         self.reassembler = WhoopReassembler(family: family)
         super.init()
-        central = CBCentralManager(delegate: self, queue: .main)
+        logConnect.info("[ble.connect] init — family=\(family == .whoop4 ? "whoop4" : "whoop5", privacy: .public) service=\(family.serviceUUID, privacy: .public)")
+        central = CBCentralManager(delegate: self, queue: bleQueue)
     }
 
     // MARK: - Public API
 
     func connect() {
-        guard central.state == .poweredOn else { return }
-        guard connectionState == .idle else { return }
+        guard central.state == .poweredOn else {
+            logConnect.warning("[ble.connect] connect() called but CBManager state=\(self.central.state.rawValue) — skipping")
+            return
+        }
+        guard connectionState == .idle else {
+            logConnect.debug("[ble.connect] connect() skipped — already in state \(self.connectionState == .scanning ? "scanning" : "connecting/connected", privacy: .public)")
+            return
+        }
 
-        // Reuse a system-level connection the strap already holds.
         if let existing = central.retrieveConnectedPeripherals(withServices: [CBUUID(string: family.serviceUUID)]).first {
-            log.info("attaching already-connected WHOOP \(existing.identifier, privacy: .public)")
+            logConnect.info("[ble.connect] found already-connected peripheral \(existing.identifier.uuidString, privacy: .public) — attaching without scan")
             connectionState = .connecting
             preparePeripheral(existing)
             if existing.state == .connected {
@@ -97,7 +126,7 @@ final class WhoopBLEClient: NSObject {
         }
 
         connectionState = .scanning
-        log.info("scanning for WHOOP \(self.family.serviceUUID, privacy: .public)")
+        logConnect.info("[ble.connect] scanning for WHOOP serviceUUID=\(self.family.serviceUUID, privacy: .public)")
         central.scanForPeripherals(
             withServices: [CBUUID(string: family.serviceUUID)],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
@@ -106,6 +135,7 @@ final class WhoopBLEClient: NSObject {
     }
 
     func disconnect() {
+        logConnect.info("[ble.connect] disconnect() called — currentState=\(self.connectionState == .connected ? "connected" : "other", privacy: .public)")
         cancelTimeouts()
         batchFlushTimer?.invalidate()
         batchFlushTimer = nil
@@ -113,43 +143,68 @@ final class WhoopBLEClient: NSObject {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil
         resetCharacteristics()
-        reassembler.reset()
+        isHistoricalSyncing = false
+        bleQueue.async { [weak self] in
+            self?.historicalIdleWorkItem?.cancel()
+            self?.historicalIdleWorkItem = nil
+            self?.reassembler.reset()
+            self?.pendingBatch = WhoopSampleBatch(deviceID: "", hrSamples: [], rrIntervals: [], batterySamples: [])
+        }
         connectionState = .idle
     }
 
-    /// Clear the error and attempt connection again.
     func retry() {
+        logConnect.info("[ble.connect] retry() — clearing error and reconnecting")
         connectionError = nil
         consecutiveConnectTimeouts = 0
         connect()
+    }
+
+    /// Re-issue sendHistoricalData and reset the app-side packet counter.
+    func resyncHistoricalData() {
+        guard connectionState == .connected else {
+            logSync.warning("[ble.sync] resyncHistoricalData() called but not connected — ignoring")
+            return
+        }
+        logSync.info("[ble.sync] resync requested — resetting packet counter and re-issuing sendHistoricalData")
+        historicalPacketCount = 0
+        isHistoricalSyncing = true
+        bleQueue.async { [weak self] in
+            self?.historicalIdleWorkItem?.cancel()
+            self?.historicalIdleWorkItem = nil
+            self?.historicalPacketCountBuffer = 0
+        }
+        publishSyncToast(phase: .syncing, title: "Syncing", detail: "Requesting historical data…")
+        send(.sendHistoricalData, writeType: .withResponse)
     }
 
     // MARK: - Command sending
 
     private func send(_ command: WhoopCommand, payload: [UInt8] = [0x00],
                       writeType: CBCharacteristicWriteType = .withoutResponse) {
-        guard let p = peripheral, let ch = cmdChar, p.state == .connected else { return }
+        guard let p = peripheral, let ch = cmdChar, p.state == .connected else {
+            logWrite.warning("[ble.write] send(\(command.rawValue)) skipped — peripheral not ready")
+            return
+        }
         seq = seq &+ 1
         let frame = command.frame(seq: seq, payload: payload, family: family)
+        let writeDesc = writeType == .withResponse ? "withResponse" : "withoutResponse"
+        logWrite.debug("[ble.write] → cmd=\(command.rawValue) seq=\(self.seq) payload=\(payload.count)B writeType=\(writeDesc, privacy: .public)")
         p.writeValue(Data(frame), for: ch, type: writeType)
     }
 
     // MARK: - Bond completion
 
     private func onBonded() {
-        // didWriteValueFor fires on EVERY .withResponse write (bond, history acks, etc.).
-        // This guard ensures the handshake runs exactly once per connection.
         guard !connectHandshakeDone else { return }
         connectHandshakeDone = true
         consecutiveConnectTimeouts = 0
         connectionError = nil
         cancelTimeouts()
 
-        log.info("bonded — syncing clock and requesting data")
+        logConnect.info("[ble.connect] bond complete — sending handshake commands (setClock → sendHistoricalData +1.5s)")
         connectionState = .connected
 
-        // On WHOOP 5.0 puffin notify chars must be subscribed post-bond
-        // (the strap rejects them before encryption is established).
         if family == .whoop5 {
             for char in pendingNotifyChars where !char.isNotifying {
                 peripheral?.setNotifyValue(true, for: char)
@@ -157,17 +212,32 @@ final class WhoopBLEClient: NSObject {
             pendingNotifyChars.removeAll()
         }
 
-        // Use .withoutResponse for all handshake commands — we don't need ACKs here, and a
-        // .withResponse write would re-fire didWriteValueFor and loop back into onBonded().
         send(.setClock, payload: WhoopCommand.setClockPayload())
-        send(.exitHighFreqSync, payload: [0x00])
         if family == .whoop5 {
             send(.toggleRealtimeHR, payload: [0x01])
         }
-        send(.sendHistoricalData)
+        // Defer sendHistoricalData 1.5s so SET_CLOCK settles (mirrors NOOP's hardware-validated ordering).
+        // exitHighFreqSync is intentionally omitted — NOOP only sends it as watchdog recovery for a
+        // stuck strap, not in the normal connect handshake; sending it here was disrupting the offload.
+        isHistoricalSyncing = true
+        publishSyncToast(phase: .syncing, title: "Syncing", detail: "Requesting historical data…")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.connectionState == .connected else { return }
+            self.logSync.info("[ble.sync] requesting historical data (sendHistoricalData cmd=22, writeType=withResponse)")
+            self.send(.sendHistoricalData, writeType: .withResponse)
+            self.bleQueue.async { self.historicalPacketCountBuffer = 0 }
+        }
 
+        var batteryTick = 0
         batchFlushTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.flushBatch() }
+            guard let self else { return }
+            self.bleQueue.async { self.flushBatch() }
+            // 0x2A19 is a stub on WHOOP 4.0 (always 100%). Refresh real battery every ~60s.
+            batteryTick += 1
+            if self.family == .whoop4, batteryTick % 2 == 0 {
+                self.logWrite.debug("[ble.write] keepalive → getBatteryLevel")
+                self.send(.getBatteryLevel, payload: [0x00])
+            }
         }
     }
 
@@ -176,7 +246,7 @@ final class WhoopBLEClient: NSObject {
     private func armScanTimeout() {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.connectionState == .scanning else { return }
-            self.log.warning("scan timeout — no WHOOP found after 15s; retrying")
+            self.logConnect.warning("[ble.connect] scan timeout (15s) — no WHOOP found; retrying scan")
             self.central.stopScan()
             self.connectionState = .idle
             self.connect()
@@ -190,15 +260,12 @@ final class WhoopBLEClient: NSObject {
             guard let self, self.connectionState == .connecting else { return }
             self.consecutiveConnectTimeouts += 1
             if self.consecutiveConnectTimeouts >= 2 {
-                // WHOOP is advertising but refusing the connection — its filter accept list
-                // only allows devices it has previously bonded with. The user needs to put the
-                // strap into pairing mode so it accepts a new bond.
-                self.log.warning("WHOOP visible but refusing connections (\(self.consecutiveConnectTimeouts) attempts) — filter list rejection")
+                self.logConnect.warning("[ble.connect] connect timeout — \(self.consecutiveConnectTimeouts) consecutive failures; WHOOP refusing connections (filter list rejection?)")
                 self.connectionError = "Your WHOOP isn't accepting connections. Repeatedly tap the top of your WHOOP to enter pairing mode, then tap Retry."
                 self.disconnect()
                 return
             }
-            self.log.warning("connect timeout — retrying (\(self.consecutiveConnectTimeouts) of 2)")
+            self.logConnect.warning("[ble.connect] connect timeout — attempt \(self.consecutiveConnectTimeouts) of 2; retrying in 3s")
             self.disconnect()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.connect() }
         }
@@ -213,56 +280,159 @@ final class WhoopBLEClient: NSObject {
         connectTimeoutWork = nil
     }
 
-    // MARK: - Frame handling
+    // MARK: - Frame handling (runs on bleQueue)
 
-    private func handleCustomFrame(_ frame: [UInt8]) {
-        // WHOOP 5.0 frames: payload starts at byte 8; rebase offsets for the shared decoder.
-        let decodeTarget: [UInt8]
-        switch family {
-        case .whoop4: decodeTarget = frame
-        case .whoop5:
-            // Rewrite the 5.0 envelope into a 4.0-style frame so decodeWhoopFrame works unchanged.
-            guard frame.count >= 8 else { return }
-            let declaredLength = Int(frame[2]) | (Int(frame[3]) << 8)
-            let payloadEnd = 8 + declaredLength - 4
-            guard payloadEnd <= frame.count else { return }
-            let payload = Array(frame[8..<payloadEnd])
-            let innerLen = UInt16(payload.count + 4)
-            let lenBytes: [UInt8] = [UInt8(innerLen & 0xFF), UInt8(innerLen >> 8)]
-            let fakeCRC8 = whoopCRC8(lenBytes)
-            decodeTarget = [0xAA] + lenBytes + [fakeCRC8] + payload + [0, 0, 0, 0]
+    nonisolated private func handleCustomFrame(_ frame: [UInt8]) {
+        let now = Int(Date().timeIntervalSince1970)
+        guard frame.count >= 5 else {
+            logFrame.warning("[ble.frame] received short frame \(frame.count)B — skipping")
+            return
         }
 
-        let now = Int(Date().timeIntervalSince1970)
-        let decoded = decodeWhoopFrame(decodeTarget)
+        // frame[4] is the packet type for both WHOOP 4.0 and 5.0 (after the 4-byte header)
+        let packetType = frame[4]
+        logFrame.debug("[ble.frame] type=0x\(String(packetType, radix: 16), privacy: .public) (\(packetType)) length=\(frame.count)B")
+
+        let decoded = decodeWhoopFrame(frame)
         switch decoded {
         case .realtimeHR(let bpm, let rrMs, _):
-            liveHR = bpm
+            logFrame.debug("[ble.frame] realtimeHR bpm=\(bpm) rrCount=\(rrMs.count)")
             pendingBatch.hrSamples.append(WhoopHRSample(ts: now, bpm: bpm))
             for ms in rrMs {
                 pendingBatch.rrIntervals.append(WhoopRRInterval(ts: now, rrMs: ms))
             }
+            Task { @MainActor [weak self] in self?.liveHR = bpm }
+
         case .batteryLevel(let pct):
-            batteryPct = Int(pct.rounded())
+            logFrame.debug("[ble.frame] batteryLevel pct=\(Int(pct.rounded()))%")
             pendingBatch.batterySamples.append(WhoopBatterySample(ts: now, pct: pct))
+            Task { @MainActor [weak self] in self?.batteryPct = Int(pct.rounded()) }
+
         case .historicalData(let raw):
-            onHistoricalFrame?(raw)
+            historicalPacketCountBuffer += 1
+            let count = historicalPacketCountBuffer
+            logFrame.debug("[ble.frame] historicalData packet #\(count) length=\(raw.count)B")
+            scheduleHistoricalIdleCompletion()
+            if count == 1 {
+                logSync.info("[ble.sync] first historical data packet received — stream is flowing")
+            } else if count % 50 == 0 {
+                logSync.info("[ble.sync] historical sync progress: \(count) packets received")
+            }
+            // Throttle MainActor updates to every 10 packets to avoid flooding
+            if count == 1 || count % 10 == 0 {
+                Task { @MainActor [weak self] in
+                    self?.historicalPacketCount = count
+                    self?.publishSyncToast(
+                        phase: .syncing,
+                        title: "Syncing",
+                        detail: "\(count) \(count == 1 ? "packet" : "packets")…"
+                    )
+                }
+            }
+            Task { @MainActor [weak self] in self?.onHistoricalFrame?(raw) }
+
+        case .historyStart:
+            logSync.info("[ble.sync] HISTORY_START received — strap beginning chunk stream")
+
+        case .historyEnd(let trim):
+            // WHOOP requires a historicalDataResult ACK to continue streaming the next chunk.
+            // Without this ACK the strap sends one chunk then goes silent.
+            logSync.info("[ble.sync] HISTORY_END received trim=\(trim) — sending historicalDataResult ACK")
+            Task { @MainActor [weak self] in self?.ackHistoryEnd(trim: trim) }
+
+        case .historyComplete:
+            // Definitive end-of-stream signal from the strap.
+            logSync.info("[ble.sync] HISTORY_COMPLETE received — all chunks delivered, finishing sync")
+            historicalIdleWorkItem?.cancel()
+            historicalIdleWorkItem = nil
+            Task { @MainActor [weak self] in self?.finishHistoricalSync() }
+
         case .unknown:
-            break
+            logFrame.debug("[ble.frame] type=0x\(String(packetType, radix: 16), privacy: .public) (\(packetType)) — no handler")
         }
     }
 
-    private func flushBatch() {
+    // MARK: - Historical sync completion (runs on bleQueue / main)
+
+    nonisolated private func scheduleHistoricalIdleCompletion() {
+        historicalIdleWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.finishHistoricalSync()
+        }
+        historicalIdleWorkItem = work
+        // 4 s of silence after the last packet = WHOOP is done streaming
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: work)
+    }
+
+    private func ackHistoryEnd(trim: UInt32) {
+        let payload = WhoopCommand.historicalDataResultPayload(trim: trim)
+        logWrite.info("[ble.write] → historicalDataResult ACK trim=\(trim) writeType=withResponse")
+        send(.historicalDataResult, payload: payload, writeType: .withResponse)
+    }
+
+    // Called on main (DispatchWorkItem fires on main)
+    private func finishHistoricalSync() {
+        let count = historicalPacketCount
+        logSync.info("[ble.sync] sync complete — total=\(count) packets")
+        isHistoricalSyncing = false
+        let detail = count == 0
+            ? "No new data"
+            : "\(count) \(count == 1 ? "packet" : "packets") captured"
+        publishSyncToast(phase: .synced, title: "Synced", detail: detail, clearAfter: 2.5)
+    }
+
+    // MARK: - Sync toast (MainActor)
+
+    private func publishSyncToast(
+        phase: AcesoSyncToastPhase,
+        title: String,
+        detail: String,
+        clearAfter: TimeInterval? = nil
+    ) {
+        syncClearWorkItem?.cancel()
+        syncToast = AcesoSyncToast(phase: phase, title: title, detail: detail)
+        guard let clearAfter else { return }
+        let toastID = syncToast?.id
+        let work = DispatchWorkItem { [weak self] in
+            guard self?.syncToast?.id == toastID else { return }
+            self?.syncToast = nil
+        }
+        syncClearWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter, execute: work)
+    }
+
+    nonisolated private func flushBatch() {
         guard !pendingBatch.isEmpty else { return }
-        let deviceID = peripheral?.identifier.uuidString ?? "unknown"
         let batch = WhoopSampleBatch(
-            deviceID: deviceID,
+            deviceID: pendingDeviceID,
             hrSamples: pendingBatch.hrSamples,
             rrIntervals: pendingBatch.rrIntervals,
             batterySamples: pendingBatch.batterySamples
         )
-        pendingBatch = WhoopSampleBatch(deviceID: deviceID, hrSamples: [], rrIntervals: [], batterySamples: [])
-        onSamples?(batch)
+        logFrame.debug("[ble.frame] flushing batch hr=\(batch.hrSamples.count) rr=\(batch.rrIntervals.count) batt=\(batch.batterySamples.count)")
+        pendingBatch = WhoopSampleBatch(deviceID: pendingDeviceID, hrSamples: [], rrIntervals: [], batterySamples: [])
+        Task { @MainActor [weak self] in self?.onSamples?(batch) }
+    }
+
+    // MARK: - Helpers
+
+    private func preparePeripheral(_ p: CBPeripheral) {
+        peripheral = p
+        p.delegate = self
+        deviceName = p.name
+        let id = p.identifier.uuidString
+        bleQueue.async { [weak self] in self?.pendingDeviceID = id }
+    }
+
+    private func resetCharacteristics() {
+        cmdChar = nil
+        pendingNotifyChars.removeAll()
+    }
+
+    private func allServiceUUIDs() -> [CBUUID] {
+        [CBUUID(string: family.serviceUUID),
+         CBUUID(string: WhoopDeviceFamily.heartRateServiceUUID),
+         CBUUID(string: WhoopDeviceFamily.batteryServiceUUID)]
     }
 }
 
@@ -271,6 +441,17 @@ final class WhoopBLEClient: NSObject {
 extension WhoopBLEClient: CBCentralManagerDelegate {
 
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        let stateStr: String
+        switch central.state {
+        case .poweredOn:  stateStr = "poweredOn"
+        case .poweredOff: stateStr = "poweredOff"
+        case .resetting:  stateStr = "resetting"
+        case .unauthorized: stateStr = "unauthorized"
+        case .unsupported:  stateStr = "unsupported"
+        case .unknown:    stateStr = "unknown"
+        @unknown default: stateStr = "unknown(\(central.state.rawValue))"
+        }
+        logConnect.info("[ble.connect] CBCentralManager state → \(stateStr, privacy: .public)")
         Task { @MainActor in
             guard central.state == .poweredOn else {
                 self.connectionState = .idle
@@ -286,8 +467,8 @@ extension WhoopBLEClient: CBCentralManagerDelegate {
                                     rssi RSSI: NSNumber) {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
             ?? peripheral.name ?? "WHOOP"
+        logConnect.info("[ble.connect] discovered \(name, privacy: .public) id=\(peripheral.identifier.uuidString, privacy: .public) rssi=\(RSSI)dBm — stopping scan and connecting")
         Task { @MainActor in
-            self.log.info("discovered \(name, privacy: .public) — connecting")
             self.central.stopScan()
             self.scanTimeoutWork?.cancel()
             self.scanTimeoutWork = nil
@@ -300,6 +481,7 @@ extension WhoopBLEClient: CBCentralManagerDelegate {
 
     nonisolated func centralManager(_ central: CBCentralManager,
                                     didConnect peripheral: CBPeripheral) {
+        logConnect.info("[ble.connect] didConnect \(peripheral.name ?? "WHOOP", privacy: .public) — discovering services")
         Task { @MainActor in
             peripheral.discoverServices(self.allServiceUUIDs())
         }
@@ -308,19 +490,29 @@ extension WhoopBLEClient: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager,
                                     didDisconnectPeripheral peripheral: CBPeripheral,
                                     error: Error?) {
+        if let error {
+            logConnect.warning("[ble.connect] didDisconnect with error: \(error.localizedDescription, privacy: .public)")
+        } else {
+            logConnect.info("[ble.connect] didDisconnect cleanly — will reconnect in 3s if no error")
+        }
         Task { @MainActor in
-            self.log.info("disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")")
             self.cancelTimeouts()
-            self.flushBatch()
+            self.bleQueue.async { [weak self] in self?.flushBatch() }
             self.batchFlushTimer?.invalidate()
             self.batchFlushTimer = nil
             self.connectHandshakeDone = false
             self.liveHR = nil
+            self.isHistoricalSyncing = false
             self.connectionState = .idle
             self.resetCharacteristics()
-            self.reassembler.reset()
+            self.bleQueue.async { [weak self] in
+                self?.historicalIdleWorkItem?.cancel()
+                self?.historicalIdleWorkItem = nil
+                self?.reassembler.reset()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 guard let self, self.connectionState == .idle, self.connectionError == nil else { return }
+                self.logConnect.info("[ble.connect] auto-reconnect triggered after disconnect")
                 self.connect()
             }
         }
@@ -329,39 +521,18 @@ extension WhoopBLEClient: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager,
                                     didFailToConnect peripheral: CBPeripheral,
                                     error: Error?) {
+        logConnect.error("[ble.connect] didFailToConnect \(peripheral.name ?? "WHOOP", privacy: .public): \(error?.localizedDescription ?? "unknown error", privacy: .public)")
         Task { @MainActor in
-            self.log.error("didFailToConnect: \(error?.localizedDescription ?? "unknown", privacy: .public)")
             self.cancelTimeouts()
             self.connectHandshakeDone = false
             self.connectionState = .idle
             self.resetCharacteristics()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 guard let self, self.connectionError == nil else { return }
+                self.logConnect.info("[ble.connect] retrying after failed connect")
                 self.connect()
             }
         }
-    }
-
-    // MARK: - Private helpers
-
-    private func preparePeripheral(_ p: CBPeripheral) {
-        peripheral = p
-        p.delegate = self
-        deviceName = p.name
-    }
-
-    private func resetCharacteristics() {
-        cmdChar = nil
-        pendingNotifyChars.removeAll()
-        notifyChars.removeAll()
-        hrChar = nil
-        batteryChar = nil
-    }
-
-    private func allServiceUUIDs() -> [CBUUID] {
-        [CBUUID(string: family.serviceUUID),
-         CBUUID(string: WhoopDeviceFamily.heartRateServiceUUID),
-         CBUUID(string: WhoopDeviceFamily.batteryServiceUUID)]
     }
 }
 
@@ -372,25 +543,32 @@ extension WhoopBLEClient: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral,
                                 didDiscoverServices error: Error?) {
         if let error {
+            logChar.error("[ble.char] service discovery failed: \(error.localizedDescription, privacy: .public)")
             Task { @MainActor in
-                self.log.error("service discovery failed: \(error.localizedDescription, privacy: .public)")
+                self.logConnect.error("[ble.connect] aborting — service discovery error")
             }
             return
         }
+        let serviceUUIDs = (peripheral.services ?? []).map { $0.uuid.uuidString }.joined(separator: ", ")
+        logChar.info("[ble.char] discovered \((peripheral.services ?? []).count) services: \(serviceUUIDs, privacy: .public)")
         Task { @MainActor in
             for service in peripheral.services ?? [] {
                 switch service.uuid {
                 case CBUUID(string: self.family.serviceUUID):
                     let charUUIDs = ([self.family.commandCharUUID] + self.family.notifyCharUUIDs)
                         .map { CBUUID(string: $0) }
+                    self.logChar.info("[ble.char] discovering \(charUUIDs.count) custom characteristics for WHOOP service")
                     peripheral.discoverCharacteristics(charUUIDs, for: service)
                 case CBUUID(string: WhoopDeviceFamily.heartRateServiceUUID):
+                    self.logChar.info("[ble.char] discovering HR characteristic (0x2A37)")
                     peripheral.discoverCharacteristics(
                         [CBUUID(string: WhoopDeviceFamily.heartRateCharUUID)], for: service)
                 case CBUUID(string: WhoopDeviceFamily.batteryServiceUUID):
+                    self.logChar.info("[ble.char] discovering battery characteristic (0x2A19)")
                     peripheral.discoverCharacteristics(
                         [CBUUID(string: WhoopDeviceFamily.batteryCharUUID)], for: service)
-                default: break
+                default:
+                    self.logChar.debug("[ble.char] ignoring unknown service \(service.uuid.uuidString, privacy: .public)")
                 }
             }
         }
@@ -400,52 +578,53 @@ extension WhoopBLEClient: CBPeripheralDelegate {
                                 didDiscoverCharacteristicsFor service: CBService,
                                 error: Error?) {
         if let error {
-            Task { @MainActor in
-                self.log.error("char discovery failed for \(service.uuid): \(error.localizedDescription, privacy: .public)")
-            }
+            logChar.error("[ble.char] characteristic discovery failed for service \(service.uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
         }
+        let charUUIDs = (service.characteristics ?? []).map { $0.uuid.uuidString }.joined(separator: ", ")
+        logChar.info("[ble.char] discovered \((service.characteristics ?? []).count) chars in service \(service.uuid.uuidString, privacy: .public): \(charUUIDs, privacy: .public)")
         Task { @MainActor in
             for char in service.characteristics ?? [] {
                 let uuidStr = char.uuid.uuidString.lowercased()
 
                 if uuidStr == self.family.commandCharUUID.lowercased() {
+                    self.logChar.info("[ble.char] found cmdChar — sending bond initiation write")
                     self.cmdChar = char
                     switch self.family {
                     case .whoop4:
-                        // Confirmed write to cmd char triggers just-works bonding on WHOOP 4.0.
-                        // If the strap is bonded to another device this write fails with
-                        // "Encryption is insufficient" — connectionError is set for the user.
                         self.seq = self.seq &+ 1
                         let frame = WhoopCommand.getBatteryLevel.frame4(seq: self.seq)
+                        self.logWrite.info("[ble.write] → getBatteryLevel (bond init) seq=\(self.seq) writeType=withResponse")
                         peripheral.writeValue(Data(frame), for: char, type: .withResponse)
-
                     case .whoop5:
                         if let hello = self.family.clientHello {
+                            self.logWrite.info("[ble.write] → clientHello (bond init) \(hello.count)B writeType=withResponse")
                             peripheral.writeValue(Data(hello), for: char, type: .withResponse)
                         }
                     }
 
                 } else if self.family.notifyCharUUIDs.map({ $0.lowercased() }).contains(uuidStr) {
-                    self.notifyChars[uuidStr] = char
                     switch self.family {
                     case .whoop4:
+                        self.logChar.info("[ble.char] subscribing to notify char \(char.uuid.uuidString, privacy: .public)")
                         peripheral.setNotifyValue(true, for: char)
                     case .whoop5:
-                        // Defer subscription: strap rejects these pre-bond on 5.0.
+                        self.logChar.info("[ble.char] queueing notify char for post-bond subscription: \(char.uuid.uuidString, privacy: .public)")
                         self.pendingNotifyChars.append(char)
                     }
 
                 } else if uuidStr == WhoopDeviceFamily.heartRateCharUUID.lowercased() {
-                    self.hrChar = char
+                    self.logChar.info("[ble.char] found standard HR char (0x2A37) — subscribing")
                     peripheral.setNotifyValue(true, for: char)
 
                 } else if uuidStr == WhoopDeviceFamily.batteryCharUUID.lowercased() {
-                    self.batteryChar = char
+                    self.logChar.info("[ble.char] found standard battery char (0x2A19) — reading + subscribing if notifiable")
                     peripheral.readValue(for: char)
                     if char.properties.contains(.notify) {
                         peripheral.setNotifyValue(true, for: char)
                     }
+                } else {
+                    self.logChar.debug("[ble.char] ignoring char \(char.uuid.uuidString, privacy: .public)")
                 }
             }
         }
@@ -454,74 +633,119 @@ extension WhoopBLEClient: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral,
                                 didWriteValueFor characteristic: CBCharacteristic,
                                 error: Error?) {
+        let uuidStr = characteristic.uuid.uuidString.lowercased()
         Task { @MainActor in
             if let error {
                 let desc = error.localizedDescription.lowercased()
                 if desc.contains("encryption") || desc.contains("authentication") || desc.contains("insufficient") {
-                    self.log.error("bond refused — strap is paired to another device")
+                    self.logWrite.error("[ble.write] bond refused — strap is paired to another device (char=\(characteristic.uuid.uuidString, privacy: .public))")
                     self.connectionError = "Your WHOOP is bonded to another device. Repeatedly tap the top of your WHOOP to enter pairing mode, then tap Retry."
                 } else {
-                    self.log.warning("write failed for \(characteristic.uuid): \(error.localizedDescription, privacy: .public)")
+                    self.logWrite.warning("[ble.write] write failed for char=\(characteristic.uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
                 return
             }
-            if characteristic.uuid.uuidString.lowercased() == self.family.commandCharUUID.lowercased() {
-                self.log.info("bond confirmed")
+
+            guard uuidStr == self.family.commandCharUUID.lowercased() else { return }
+
+            if !self.connectHandshakeDone {
+                self.logWrite.info("[ble.write] ack received for bond-init write — calling onBonded()")
                 self.onBonded()
+            } else {
+                // Subsequent withResponse acks (e.g. sendHistoricalData, historicalDataResult)
+                self.logWrite.debug("[ble.write] ack received for post-bond command write (seq=\(self.seq))")
             }
         }
     }
 
+    // All heavy work (reassembly, CRC checks, frame decoding) runs directly on bleQueue.
+    // Only the final state mutations dispatch back to @MainActor.
     nonisolated func peripheral(_ peripheral: CBPeripheral,
                                 didUpdateValueFor characteristic: CBCharacteristic,
                                 error: Error?) {
-        guard error == nil, let data = characteristic.value else { return }
+        if let error {
+            logNotify.warning("[ble.notify] didUpdateValue error for \(characteristic.uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        guard let data = characteristic.value else {
+            logNotify.warning("[ble.notify] nil value for \(characteristic.uuid.uuidString, privacy: .public)")
+            return
+        }
         let bytes = [UInt8](data)
-        Task { @MainActor in
-            let uuidStr = characteristic.uuid.uuidString.lowercased()
+        let uuidStr = characteristic.uuid.uuidString.lowercased()
+        logNotify.debug("[ble.notify] ← char=\(characteristic.uuid.uuidString, privacy: .public) bytes=\(bytes.count) first=0x\(bytes.first.map { String($0, radix: 16) } ?? "--", privacy: .public)")
 
-            // Standard BLE Heart Rate profile (works pre-bond on both generations).
-            if uuidStr == WhoopDeviceFamily.heartRateCharUUID.lowercased() {
-                if let m = StandardHeartRate.parse(bytes), m.hr >= 30, m.hr <= 220 {
-                    let now = Int(Date().timeIntervalSince1970)
-                    self.liveHR = m.hr
-                    self.pendingBatch.hrSamples.append(WhoopHRSample(ts: now, bpm: m.hr))
-                    for ms in m.rr {
-                        self.pendingBatch.rrIntervals.append(WhoopRRInterval(ts: now, rrMs: ms))
-                    }
+        // Standard BLE Heart Rate (0x2A37)
+        if uuidStr == WhoopDeviceFamily.heartRateCharUUID.lowercased() {
+            logNotify.debug("[ble.notify] standard HR notification \(bytes.count)B")
+            if let m = StandardHeartRate.parse(bytes), m.hr >= 30, m.hr <= 220 {
+                let now = Int(Date().timeIntervalSince1970)
+                pendingBatch.hrSamples.append(WhoopHRSample(ts: now, bpm: m.hr))
+                for ms in m.rr {
+                    pendingBatch.rrIntervals.append(WhoopRRInterval(ts: now, rrMs: ms))
                 }
-                // On WHOOP 5.0, streaming HR means the link is up.
-                if self.family == .whoop5, self.connectionState != .connected {
-                    self.log.info("WHOOP 5.0: live HR streaming — link established")
+                Task { @MainActor [weak self] in self?.liveHR = m.hr }
+            }
+            if family == .whoop5 {
+                Task { @MainActor [weak self] in
+                    guard let self, self.connectionState != .connected else { return }
+                    self.logConnect.info("[ble.connect] WHOOP 5.0 HR streaming confirmed — treating as bond complete")
                     self.onBonded()
                 }
-                return
             }
+            return
+        }
 
-            // Standard BLE Battery Service.
-            if uuidStr == WhoopDeviceFamily.batteryCharUUID.lowercased() {
-                // WHOOP 4.0 exposes a stub 100% on 0x2A19; real value comes from GET_BATTERY_LEVEL.
-                // WHOOP 5.0 correctly uses 0x2A19.
-                if self.family == .whoop5, let pct = bytes.first {
-                    self.batteryPct = Int(pct)
-                    self.pendingBatch.batterySamples.append(
-                        WhoopBatterySample(ts: Int(Date().timeIntervalSince1970), pct: Double(pct)))
+        // Standard BLE Battery (0x2A19)
+        if uuidStr == WhoopDeviceFamily.batteryCharUUID.lowercased() {
+            logNotify.debug("[ble.notify] standard battery notification \(bytes.count)B value=\(bytes.first ?? 0)%")
+            if family == .whoop5, let pct = bytes.first {
+                let now = Int(Date().timeIntervalSince1970)
+                pendingBatch.batterySamples.append(WhoopBatterySample(ts: now, pct: Double(pct)))
+                Task { @MainActor [weak self] in self?.batteryPct = Int(pct) }
+            }
+            return
+        }
+
+        // Custom WHOOP notify characteristics — ALL three go through the same reassembler (matching
+        // NOOP's routing: cmdNotifyChar + eventNotifyChar + dataNotifyChar all feed reassembler.feed).
+        // Complete frames pass through as-is; fragmented frames accumulate until complete.
+        let notifyUUIDs = family.notifyCharUUIDs.map { $0.lowercased() }
+        if notifyUUIDs.contains(uuidStr) {
+            // Log first 8 bytes as hex to aid protocol debugging
+            let hexHead = bytes.prefix(8).map { String(format: "%02x", $0) }.joined(separator: " ")
+            logNotify.debug("[ble.notify] custom char \(bytes.count)B head=[\(hexHead, privacy: .public)]")
+
+            let result = reassembler.feed(bytes)
+
+            if result.crcFailures > 0 {
+                logNotify.warning("[ble.notify] reassembler discarded \(result.crcFailures) CRC-failed frame(s) from \(characteristic.uuid.uuidString, privacy: .public)")
+            }
+            if result.frames.isEmpty && result.crcFailures == 0 {
+                // Buffer has data but frame isn't complete yet
+                let declared = reassembler.declaredTotal
+                let buffered = reassembler.bufferCount
+                if let total = declared {
+                    logNotify.debug("[ble.notify] reassembler waiting: buffered=\(buffered)B declaredTotal=\(total)B need=\(max(0, total - buffered))B more")
+                } else {
+                    logNotify.debug("[ble.notify] reassembler waiting: buffered=\(buffered)B (can't yet determine frame length)")
                 }
-                return
+            } else if !result.frames.isEmpty {
+                logNotify.debug("[ble.notify] reassembler produced \(result.frames.count) frame(s)")
             }
+            for frame in result.frames { handleCustomFrame(frame) }
+        } else {
+            logNotify.debug("[ble.notify] ignoring notification from unrecognized char \(characteristic.uuid.uuidString, privacy: .public)")
+        }
+    }
 
-            // Custom WHOOP notify characteristics (fragmented data on 0005/fd4b0005;
-            // complete frames on cmd-notify and event-notify chars).
-            let isDataChar = self.family.notifyCharUUIDs.last.map { uuidStr == $0.lowercased() } ?? false
-            if isDataChar {
-                // Data char carries fragmented frames — reassemble first.
-                let frames = self.reassembler.feed(bytes)
-                for frame in frames { self.handleCustomFrame(frame) }
-            } else if self.family.notifyCharUUIDs.map({ $0.lowercased() }).contains(uuidStr) {
-                // Command-response and event chars carry single complete frames.
-                let check = verifyWhoopFrame(bytes, family: self.family)
-                if check.ok { self.handleCustomFrame(bytes) }
-            }
+    nonisolated func peripheral(_ peripheral: CBPeripheral,
+                                didUpdateNotificationStateFor characteristic: CBCharacteristic,
+                                error: Error?) {
+        if let error {
+            logChar.warning("[ble.char] setNotify failed for \(characteristic.uuid.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        } else {
+            logChar.info("[ble.char] notifications \(characteristic.isNotifying ? "enabled" : "disabled", privacy: .public) for \(characteristic.uuid.uuidString, privacy: .public)")
         }
     }
 }

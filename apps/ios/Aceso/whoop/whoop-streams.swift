@@ -91,6 +91,9 @@ enum WhoopFramePayload {
     case realtimeHR(bpm: Int, rrMs: [Int], ts: Int)
     case batteryLevel(pct: Double)
     case historicalData(raw: [UInt8])   // full frame bytes for future deeper decode
+    case historyStart
+    case historyEnd(trim: UInt32)       // WHOOP requires historicalDataResult ACK to continue
+    case historyComplete
     case unknown
 }
 
@@ -134,6 +137,22 @@ func decodeWhoopFrame(_ frame: [UInt8]) -> WhoopFramePayload {
 
     case .historicalData:
         return .historicalData(raw: frame)
+
+    case .metadata:
+        // frame[6] = MetadataType cmd: 1=HISTORY_START, 2=HISTORY_END, 3=HISTORY_COMPLETE
+        // HISTORY_END payload at frame[7..]: unix(4) + subsec(2) + unk0(4) + trim(4) = 14 bytes min
+        guard frame.count >= 7 else { return .unknown }
+        switch frame[6] {
+        case 1: return .historyStart
+        case 2:
+            // trim cursor at frame[17..20] (pay[10..13])
+            guard frame.count >= 21 else { return .unknown }
+            let trim = UInt32(frame[17]) | (UInt32(frame[18]) << 8)
+                | (UInt32(frame[19]) << 16) | (UInt32(frame[20]) << 24)
+            return .historyEnd(trim: trim)
+        case 3: return .historyComplete
+        default: return .unknown
+        }
 
     default:
         return .unknown

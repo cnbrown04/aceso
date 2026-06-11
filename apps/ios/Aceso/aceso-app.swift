@@ -5,6 +5,7 @@ struct AcesoApp: App {
     @State private var whoopClient = WhoopBLEClient(family: .whoop4)
 
     init() {
+        AcesoTheme.configureAppearance()
         AddonLoader.shared.activateAll()
     }
 
