@@ -221,8 +221,21 @@ Go E2E tests use `//go:build e2e` at the top of the file and `net/http/httptest`
 
 | Type | Tool | Location | Run |
 |---|---|---|---|
+| Build check | `xcodebuild build` | — | `make build-ios` |
 | Unit | Swift Testing | `AcesoTests/` | via Xcode or CI |
 | UI | XCUITest | `AcesoUITests/` | via Xcode or CI |
+
+**After every iOS change, run the build check before considering the task done:**
+
+```bash
+xcodebuild build \
+  -project apps/ios/Aceso.xcodeproj \
+  -scheme Aceso \
+  -destination 'generic/platform=iOS Simulator' \
+  -quiet
+```
+
+A zero exit code means the project compiles cleanly. Fix any errors before reporting success.
 
 XCUITest launches the real app in a simulator and drives it through the accessibility layer. It is the iOS equivalent of Playwright. UI tests require a macOS runner in CI (10× the cost of Linux — keep them lean).
 
@@ -305,6 +318,18 @@ gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq '.object.sha'
 - Do not run `kubectl`, `helm`, or other cluster tools directly — print the command for the operator to run.
 - Do not read or commit `.env` files, credentials, or secrets.
 - Do not amend published commits. Create a new commit instead.
+
+---
+
+## iOS-specific: WHOOP BLE pairing
+
+WHOOP 4.0 uses a **BLE Filter Accept List (FAL)**: after initial bonding, the strap only accepts L2CAP connections from device Bluetooth addresses it has previously bonded with. If Aceso discovers the WHOOP (it appears in scan results) but `didConnect` never fires, the iPhone's BT address is not in the WHOOP's filter — this typically happens when the strap was last bonded to a different device.
+
+**How `WhoopBLEClient` handles this:** after 2 consecutive connect timeouts where the WHOOP was visible, it sets `connectionError` and surfaces a message telling the user to enter pairing mode. Auto-retry stops; the user must tap Retry after clearing the condition.
+
+**WHOOP pairing mode:** repeatedly tap the top of the WHOOP 4.0 (the hard sensor side). This clears the filter accept list and lets any device initiate a fresh just-works bond. The user does **not** need the official WHOOP app — pairing mode is sufficient.
+
+**Bond write rejection (`didWriteValueFor` "Encryption is insufficient"):** means the strap accepted the connection but refused the bond because it still holds an LTK from a different device. The user must enter pairing mode on the WHOOP (button hold) and then tap Retry in Aceso.
 
 ---
 

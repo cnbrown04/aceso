@@ -158,7 +158,7 @@ Import order:
 
 Comments explain why, not what. If removing the comment would not confuse a future reader, don't write it.
 
-Full details are in `docs/conventions.md`. `AGENTS.md` at the repo root is the single source of truth for anyone (human or AI) working in this repository.
+Full details are in [docs/conventions.md](docs/conventions.md). [AGENTS.md](AGENTS.md) at the repo root is the single source of truth for anyone (human or AI) working in this repository.
 
 ---
 
@@ -166,13 +166,13 @@ Full details are in `docs/conventions.md`. `AGENTS.md` at the repo root is the s
 
 Addons live in `addons/<name>/` and are separate from the core apps. Each addon can ship code for any combination of iOS, web, and server. They register themselves at startup; the core apps never import addon code directly.
 
-To create one, copy `addons/_template/` and fill in `addon.json`. See `docs/addons.md` for the full guide.
+To create one, copy `addons/_template/` and fill in `addon.json`. See [docs/addons.md](docs/addons.md) for the full guide.
 
 ---
 
 ## Contributing
 
-Read `AGENTS.md` before opening a PR. It covers naming rules, import order, testing requirements, and CI security rules that all contributions must follow.
+Read [AGENTS.md](AGENTS.md) before opening a PR. It covers naming rules, import order, testing requirements, and CI security rules that all contributions must follow.
 
 After cloning, install the pre-commit hooks:
 
@@ -189,4 +189,4 @@ For bugs and feature requests, use the issue templates.
 
 ## License
 
-MIT - see `LICENSE`.
+MIT - see [LICENSE](LICENSE).

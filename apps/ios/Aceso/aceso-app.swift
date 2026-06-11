@@ -1,14 +1,9 @@
-//
-//  AcesoApp.swift
-//  Aceso
-//
-//  Created by Caleb Brown on 6/10/26.
-//
-
 import SwiftUI
 
 @main
 struct AcesoApp: App {
+    @State private var whoopClient = WhoopBLEClient(family: .whoop4)
+
     init() {
         AddonLoader.shared.activateAll()
     }
@@ -16,6 +11,7 @@ struct AcesoApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(whoopClient)
         }
     }
 }
