@@ -16,6 +16,8 @@ public enum WhoopFramePayload: Sendable {
     case historyEnd(trim: UInt32)
     case historyComplete
     case consoleLog(text: String)
+    case alarmTime(WhoopAlarmTime)
+    case hapticsPatterns(raw: [UInt8])
     case unknown(type: UInt8)
 }
 
@@ -84,6 +86,12 @@ public func decodeWhoopFrame(_ frame: [UInt8], family: WhoopDeviceFamily = .whoo
             let harvard = decodeVersionString(frame, start: payStart)
             let boylston = decodeVersionString(frame, start: payStart + 16)
             return .versionInfo(WhoopVersionInfo(harvard: harvard, boylston: boylston))
+        case WhoopCommand.getAlarmTime.rawValue:
+            guard let epoch = readU32LE(frame, payStart + 1) else { return .unknown(type: rawType) }
+            return .alarmTime(WhoopAlarmTime(epochSec: epoch))
+        case WhoopCommand.getAllHapticsPattern.rawValue:
+            let end = max(payStart, frame.count - 4)
+            return .hapticsPatterns(raw: Array(frame[payStart..<end]))
         default:
             return .unknown(type: rawType)
         }

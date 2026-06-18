@@ -1,6 +1,6 @@
 import Foundation
-import WhoopAPI
-import WhoopBLE
+@_exported import WhoopAPI
+@_exported import WhoopBLE
 @_exported import WhoopProtocol
 
 /// Unified entry point for WHOOP strap BLE and cloud REST API access.

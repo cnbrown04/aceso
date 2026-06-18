@@ -102,6 +102,17 @@ public struct WhoopDataRange: Codable, Sendable, Equatable {
     }
 }
 
+/// Armed alarm time returned by `GET_ALARM_TIME` (opcode 67).
+public struct WhoopAlarmTime: Codable, Sendable, Equatable {
+    public let epochSec: UInt32
+
+    public init(epochSec: UInt32) {
+        self.epochSec = epochSec
+    }
+
+    public var date: Date { Date(timeIntervalSince1970: TimeInterval(epochSec)) }
+}
+
 public struct WhoopExtendedBattery: Codable, Sendable, Equatable {
     public let pct: Double
     public let millivolts: Int

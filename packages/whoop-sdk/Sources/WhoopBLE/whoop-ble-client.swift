@@ -11,6 +11,7 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
     public var liveHR: Int?
     public var batteryPct: Int?
     public var deviceName: String?
+    public var deviceID: String?
     public var connectionError: String?
     public var syncToast: WhoopSyncToast?
     public var isHistoricalSyncing: Bool = false
@@ -18,12 +19,18 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
     public var isWorn: Bool?
     public var versionInfo: WhoopVersionInfo?
     public var dataRange: WhoopDataRange?
+    public var alarmTime: WhoopAlarmTime?
+
+    /// True after the strap has accepted a bonded write (4.0: battery command ACK; 5.0: CLIENT_HELLO or HR notify).
+    public var isBonded: Bool { connectHandshakeDone }
 
     public var onSamples: ((WhoopSampleBatch) -> Void)?
     public var onHistoricalFrame: (([UInt8]) -> Void)?
     public var onEvent: ((WhoopStrapEvent) -> Void)?
     public var onRawIMU: ((WhoopIMUSample) -> Void)?
     public var onRawOptical: ((WhoopRawOpticalPacket) -> Void)?
+    public var onConsoleLog: ((String) -> Void)?
+    public var onHapticsPatterns: (([UInt8]) -> Void)?
 
     nonisolated public let family: WhoopDeviceFamily
 
@@ -92,6 +99,7 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
         connectHandshakeDone = false
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil
+        deviceID = nil
         resetCharacteristics()
         isHistoricalSyncing = false
         bleQueue.async { [weak self] in
@@ -143,6 +151,83 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
 
     public func requestExtendedBattery() {
         send(.getExtendedBatteryInfo, payload: [0x00])
+    }
+
+    // MARK: - Haptics (bonded)
+
+    /// Run a WHOOP 4.0 haptic pattern (opcode 79). Returns `false` if not bonded.
+    @discardableResult
+    public func runHaptics(
+        pattern: WhoopHapticPattern4 = .alarm,
+        loops: UInt8 = WhoopHapticPattern4.defaultLoops
+    ) -> Bool {
+        guard isBonded else { return false }
+        send(.runHapticsPattern, payload: WhoopHaptics.pattern4Payload(patternId: pattern.rawValue, loops: loops))
+        return true
+    }
+
+    /// Run a WHOOP 5.0 haptic preset (opcode 19). Returns `false` if not bonded.
+    @discardableResult
+    public func runHaptics(preset: WhoopHapticPreset5) -> Bool {
+        guard isBonded else { return false }
+        send(.runHapticPatternMaverick, payload: preset.payload)
+        return true
+    }
+
+    /// Stop an in-progress haptic (opcode 122). Returns `false` if not bonded.
+    @discardableResult
+    public func stopHaptics() -> Bool {
+        guard isBonded else { return false }
+        send(.stopHaptics, payload: [0x00])
+        return true
+    }
+
+    /// Query the strap's haptic pattern table (opcode 80). Response arrives via `onHapticsPatterns`.
+    @discardableResult
+    public func requestHapticsPatterns() -> Bool {
+        guard isBonded else { return false }
+        send(.getAllHapticsPattern, payload: [0x00])
+        return true
+    }
+
+    // MARK: - Alarms (bonded; 5.0 experimental)
+
+    /// Arm the strap's single alarm slot for a Unix timestamp. Returns `false` if not bonded.
+    @discardableResult
+    public func setAlarm(epochSec: UInt32) -> Bool {
+        guard isBonded else { return false }
+        send(.setAlarmTime, payload: WhoopCommand.setAlarmPayload(epochSec: epochSec), writeType: .withResponse)
+        return true
+    }
+
+    /// Arm the strap's single alarm slot. Returns `false` if not bonded.
+    @discardableResult
+    public func setAlarm(at date: Date) -> Bool {
+        setAlarm(epochSec: UInt32(date.timeIntervalSince1970))
+    }
+
+    /// Read the currently armed alarm. Response updates `alarmTime` and may arrive via command response.
+    @discardableResult
+    public func getAlarm() -> Bool {
+        guard isBonded else { return false }
+        send(.getAlarmTime, payload: [0x01], writeType: .withResponse)
+        return true
+    }
+
+    /// Fire the alarm haptic immediately (test). Returns `false` if not bonded.
+    @discardableResult
+    public func runAlarm() -> Bool {
+        guard isBonded else { return false }
+        send(.runAlarm, payload: [0x01], writeType: .withResponse)
+        return true
+    }
+
+    /// Disarm the alarm. Returns `false` if not bonded.
+    @discardableResult
+    public func disableAlarm() -> Bool {
+        guard isBonded else { return false }
+        send(.disableAlarm, payload: [0x01], writeType: .withResponse)
+        return true
     }
 
     private func send(_ command: WhoopCommand, payload: [UInt8] = [0x00],
@@ -293,7 +378,16 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
             historicalIdleWorkItem = nil
             Task { @MainActor [weak self] in self?.finishHistoricalSync() }
 
-        case .historyStart, .deviceClock, .consoleLog, .unknown:
+        case .consoleLog(let text):
+            Task { @MainActor [weak self] in self?.onConsoleLog?(text) }
+
+        case .alarmTime(let alarm):
+            Task { @MainActor [weak self] in self?.alarmTime = alarm }
+
+        case .hapticsPatterns(let raw):
+            Task { @MainActor [weak self] in self?.onHapticsPatterns?(raw) }
+
+        case .historyStart, .deviceClock, .unknown:
             break
         }
     }
@@ -340,6 +434,7 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
         peripheral = p
         p.delegate = self
         deviceName = p.name
+        deviceID = p.identifier.uuidString
         let id = p.identifier.uuidString
         bleQueue.async { [weak self] in self?.pendingDeviceID = id }
     }
