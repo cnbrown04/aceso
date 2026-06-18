@@ -1,5 +1,4 @@
 import Foundation
-import RemoteActionsAddon
 import WhoopSDK
 
 struct RemoteActionsAddonBridge: IOSAddonWithWhoop {

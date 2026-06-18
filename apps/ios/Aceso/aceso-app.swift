@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 import WhoopSDK
-import RemoteActionsAddon
 
 @main
 struct AcesoApp: App {

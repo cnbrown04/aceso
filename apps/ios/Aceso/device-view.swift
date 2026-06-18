@@ -1,5 +1,4 @@
 import SwiftUI
-import RemoteActionsAddon
 import WhoopSDK
 
 struct DeviceView: View {
