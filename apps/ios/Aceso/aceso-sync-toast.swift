@@ -1,19 +1,8 @@
 import SwiftUI
+import WhoopSDK
 
-// MARK: - Types (ported from GooseBLETypes)
-
-enum AcesoSyncToastPhase: String {
-    case syncing
-    case synced
-    case failed
-}
-
-struct AcesoSyncToast: Identifiable, Equatable {
-    let id = UUID()
-    let phase: AcesoSyncToastPhase
-    let title: String
-    let detail: String
-}
+typealias AcesoSyncToast = WhoopSyncToast
+typealias AcesoSyncToastPhase = WhoopSyncToastPhase
 
 // MARK: - SyncToastHost (ported from Goose RootView)
 

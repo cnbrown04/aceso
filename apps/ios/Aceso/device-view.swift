@@ -1,4 +1,5 @@
 import SwiftUI
+import WhoopSDK
 
 struct DeviceView: View {
     @Environment(WhoopBLEClient.self) private var whoop
