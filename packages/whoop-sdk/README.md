@@ -35,6 +35,8 @@ Comprehensive Swift SDK for interacting with WHOOP devices and the official WHOO
 
 ## Open-source sources
 
+Full community audit (repos surveyed, consensus, haptics, alarms): **[docs/whoop-open-source-reference.md](../docs/whoop-open-source-reference.md)**
+
 This SDK synthesizes reverse-engineering and API work from the community:
 
 | Project | Contribution |
