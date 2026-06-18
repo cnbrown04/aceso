@@ -86,7 +86,7 @@ jobs:
       - run: npm test
 
   # -----------------------------------------------------------------------
-  # Web — Playwright e2e
+  # Web — Playwright e2e (skipped when no web-related files changed)
   # -----------------------------------------------------------------------
   playwright:
     name: Web (e2e)
@@ -101,25 +101,42 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@6852f92c20ea7fd3b0c25de3b5112db3a98da050 # v3
+        id: changes
+        with:
+          filters: |
+            web:
+              - 'apps/web/**'
+              - 'addons/**/web/**'
+
+      - name: Skip — no web changes
+        if: steps.changes.outputs.web != 'true'
+        run: echo "No web-related files changed; skipping Playwright."
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.changes.outputs.web == 'true'
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      - run: npm ci
+      - if: steps.changes.outputs.web == 'true'
+        run: npm ci
 
       - name: Install Playwright browsers
+        if: steps.changes.outputs.web == 'true'
         run: npx playwright install --with-deps chromium firefox
 
       - name: Run Playwright tests
+        if: steps.changes.outputs.web == 'true'
         run: npm run test:e2e
         env:
           CI: "true"
 
       - name: Upload Playwright report
-        if: always()
+        if: always() && steps.changes.outputs.web == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-report
@@ -127,7 +144,7 @@ jobs:
           retention-days: 14
 
       - name: Comment test summary on PR
-        if: always() && github.event_name == 'pull_request'
+        if: always() && steps.changes.outputs.web == 'true' && github.event_name == 'pull_request'
         uses: daun/playwright-report-summary@1229105480a2a4bdd91598d8a146fbab41343fce # v3
         with:
           report-file: apps/web/playwright-report/results.json
