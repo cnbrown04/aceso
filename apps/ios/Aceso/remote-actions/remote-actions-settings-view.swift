@@ -1,7 +1,6 @@
 import SwiftUI
-import RemoteActionsAddon
 
-public struct RemoteActionsSettingsView: View {
+struct RemoteActionsSettingsView: View {
     @State private var coordinator = RemoteActionsCoordinator.shared
     @State private var serverURLText = UserDefaults.standard.string(forKey: "aceso.remote.serverURL") ?? "http://localhost:8080"
     @State private var apiKeyText = UserDefaults.standard.string(forKey: "aceso.remote.apiKey") ?? "dev-api-key"
