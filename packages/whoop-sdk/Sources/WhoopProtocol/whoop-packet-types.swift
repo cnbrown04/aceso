@@ -42,7 +42,13 @@ public enum WhoopEventNumber: UInt8, Sendable, Codable {
     case bleRealtimeHrOff = 34
     case rawDataCollectionOn = 46
     case rawDataCollectionOff = 47
+    case strapDrivenAlarmSet = 56
+    case strapDrivenAlarmExecuted = 57
+    case appDrivenAlarmExecuted = 58
+    case strapDrivenAlarmDisabled = 59
+    case hapticsFired = 60
     case extendedBatteryInformation = 63
+    case hapticsTerminated = 100
     case highFreqSyncPrompt = 96
     case highFreqSyncEnabled = 97
     case highFreqSyncDisabled = 98
@@ -52,4 +58,39 @@ public enum WhoopMetadataType: UInt8, Sendable {
     case historyStart = 1
     case historyEnd = 2
     case historyComplete = 3
+}
+
+/// Capabilities grouped by whether the strap must be bonded (encrypted link).
+public enum WhoopBondRequirement: Sendable {
+    /// Standard SIG services — work without custom-service bond.
+    case unbonded
+    /// Custom GATT service — requires just-works bond via confirmed command write.
+    case bonded
+}
+
+/// Documents which SDK operations need a bonded strap.
+public enum WhoopCapability: String, Sendable, CaseIterable {
+    case liveHeartRateStandard = "live_hr_standard"
+    case batteryStandard = "battery_standard"
+    case liveHeartRateCustom = "live_hr_custom"
+    case batteryCustom = "battery_custom"
+    case historicalOffload = "historical_offload"
+    case haptics = "haptics"
+    case alarms = "alarms"
+    case rawIMU = "raw_imu"
+    case rawOptical = "raw_optical"
+    case strapEvents = "strap_events"
+    case consoleLogs = "console_logs"
+    case setClock = "set_clock"
+    case versionInfo = "version_info"
+    case dataRange = "data_range"
+
+    public var bondRequirement: WhoopBondRequirement {
+        switch self {
+        case .liveHeartRateStandard, .batteryStandard:
+            return .unbonded
+        default:
+            return .bonded
+        }
+    }
 }

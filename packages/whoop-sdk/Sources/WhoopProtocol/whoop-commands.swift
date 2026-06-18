@@ -27,6 +27,7 @@ public enum WhoopCommand: UInt8, Sendable {
     case runAlarm = 68
     case disableAlarm = 69
     case getAdvertisingNameHarvard = 76
+    case runHapticPatternMaverick = 19
     case runHapticsPattern = 79
     case getAllHapticsPattern = 80
     case startRawData = 81

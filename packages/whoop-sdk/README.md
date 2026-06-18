@@ -23,7 +23,9 @@ Comprehensive Swift SDK for interacting with WHOOP devices and the official WHOO
 - Raw IMU (accelerometer + gyroscope) decode
 - Raw optical/PPG packet capture
 - Strap events (wrist on/off, charging, bonding, etc.)
-- Research commands: raw data, IMU mode, optical config
+- Haptics and alarms (bonded strap)
+- Bond requirement reference: **[docs/whoop-bonded-requirements.md](../docs/whoop-bonded-requirements.md)**
+- Integration playbook (for agents): **[docs/whoop-bonded-integration-guide.md](../docs/whoop-bonded-integration-guide.md)**
 
 ### REST API (cloud)
 
