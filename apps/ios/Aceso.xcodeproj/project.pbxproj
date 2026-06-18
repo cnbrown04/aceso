@@ -226,7 +226,7 @@
 /* Begin XCLocalSwiftPackageReference section */
 		3C48761F2FDA500000B5CFE0 /* XCLocalSwiftPackageReference "whoop-sdk" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../../packages/whoop-sdk;
+			relativePath = ../../packages/whoop-sdk;
 		};
 /* End XCLocalSwiftPackageReference section */
 
