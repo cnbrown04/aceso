@@ -1,4 +1,5 @@
 import SwiftUI
+import WhoopSDK
 
 struct ContentView: View {
     var body: some View {
@@ -12,5 +13,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .environment(WhoopBLEClient(family: .whoop4))
+        .environment(WhoopSDK.makeBLEClient(family: .whoop4))
 }

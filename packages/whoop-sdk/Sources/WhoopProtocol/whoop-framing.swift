@@ -2,7 +2,6 @@ import Foundation
 
 // MARK: - CRC8 (poly 0x07) — WHOOP 4.0 header check
 
-// Lookup table ported verbatim from NOOP's WhoopProtocol/Framing.swift.
 private let crc8Table: [UInt8] = [
     0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
     0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41, 0x54, 0x53, 0x5A, 0x5D,
@@ -22,15 +21,13 @@ private let crc8Table: [UInt8] = [
     0xDE, 0xD9, 0xD0, 0xD7, 0xC2, 0xC5, 0xCC, 0xCB, 0xE6, 0xE1, 0xE8, 0xEF, 0xFA, 0xFD, 0xF4, 0xF3,
 ]
 
-func whoopCRC8(_ bytes: [UInt8]) -> UInt8 {
+public func whoopCRC8(_ bytes: [UInt8]) -> UInt8 {
     var crc: UInt8 = 0
     for b in bytes { crc = crc8Table[Int(crc ^ b)] }
     return crc
 }
 
-// MARK: - CRC16-Modbus (poly 0xA001, init 0xFFFF, reflected) — WHOOP 5.0 header check
-
-func whoopCRC16Modbus(_ bytes: [UInt8]) -> UInt16 {
+public func whoopCRC16Modbus(_ bytes: [UInt8]) -> UInt16 {
     var crc: UInt16 = 0xFFFF
     for b in bytes {
         crc ^= UInt16(b)
@@ -40,8 +37,6 @@ func whoopCRC16Modbus(_ bytes: [UInt8]) -> UInt16 {
     }
     return crc
 }
-
-// MARK: - CRC32 (zlib, reflected, poly 0xEDB88320) — payload integrity for both families
 
 private let crc32Table: [UInt32] = {
     var t = [UInt32](repeating: 0, count: 256)
@@ -53,46 +48,34 @@ private let crc32Table: [UInt32] = {
     return t
 }()
 
-func whoopCRC32(_ bytes: [UInt8]) -> UInt32 {
+public func whoopCRC32(_ bytes: [UInt8]) -> UInt32 {
     var crc: UInt32 = 0xFFFF_FFFF
     for b in bytes { crc = crc32Table[Int((crc ^ UInt32(b)) & 0xFF)] ^ (crc >> 8) }
     return crc ^ 0xFFFF_FFFF
 }
 
-// MARK: - Frame verification
+public struct WhoopFrameCheck: Sendable {
+    public let ok: Bool
+    public let declaredLength: Int?
 
-struct WhoopFrameCheck {
-    let ok: Bool
-    let declaredLength: Int?
+    public init(ok: Bool, declaredLength: Int?) {
+        self.ok = ok
+        self.declaredLength = declaredLength
+    }
 }
 
-/// Verify a complete WHOOP 4.0 frame.
-///
-/// Layout: [0xAA][len u16 LE][CRC8(len)][…inner…][CRC32(inner) u32 LE]
-/// Total bytes = len + 4, inner = frame[4..<len].
-func verifyWhoopFrame4(_ frame: [UInt8]) -> WhoopFrameCheck {
+public func verifyWhoopFrame4(_ frame: [UInt8]) -> WhoopFrameCheck {
     guard frame.count >= 8, frame[0] == 0xAA else { return WhoopFrameCheck(ok: false, declaredLength: nil) }
     let length = Int(frame[1]) | (Int(frame[2]) << 8)
     guard whoopCRC8([frame[1], frame[2]]) == frame[3] else { return WhoopFrameCheck(ok: false, declaredLength: length) }
     guard length >= 7, length <= 4096, length + 4 <= frame.count else { return WhoopFrameCheck(ok: false, declaredLength: length) }
     let inner = Array(frame[4..<length])
-    let stored = UInt32(frame[length]) | (UInt32(frame[length+1]) << 8)
-        | (UInt32(frame[length+2]) << 16) | (UInt32(frame[length+3]) << 24)
+    let stored = UInt32(frame[length]) | (UInt32(frame[length + 1]) << 8)
+        | (UInt32(frame[length + 2]) << 16) | (UInt32(frame[length + 3]) << 24)
     return WhoopFrameCheck(ok: whoopCRC32(inner) == stored, declaredLength: length)
 }
 
-/// Verify a complete WHOOP 5.0 (puffin) frame.
-///
-/// Layout:
-///   [0]     0xAA  SOF
-///   [1]     0x01  format byte
-///   [2-3]   declaredLength u16 LE  (= payloadLen + 4)
-///   [4-5]   header fields (contains seq at [5])
-///   [6-7]   CRC16-Modbus of frame[0..<6], u16 LE
-///   [8..]   payload bytes (length = declaredLength - 4)
-///   [tail]  CRC32(payload) u32 LE
-///   Total bytes = declaredLength + 8
-func verifyWhoopFrame5(_ frame: [UInt8]) -> WhoopFrameCheck {
+public func verifyWhoopFrame5(_ frame: [UInt8]) -> WhoopFrameCheck {
     guard frame.count >= 12, frame[0] == 0xAA else { return WhoopFrameCheck(ok: false, declaredLength: nil) }
     let declaredLength = Int(frame[2]) | (Int(frame[3]) << 8)
     guard declaredLength >= 4, declaredLength <= 4096 else { return WhoopFrameCheck(ok: false, declaredLength: declaredLength) }
@@ -102,35 +85,29 @@ func verifyWhoopFrame5(_ frame: [UInt8]) -> WhoopFrameCheck {
     let gotHeaderCRC = UInt16(frame[6]) | (UInt16(frame[7]) << 8)
     guard wantHeaderCRC == gotHeaderCRC else { return WhoopFrameCheck(ok: false, declaredLength: declaredLength) }
     let payloadStart = 8
-    let payloadEnd   = payloadStart + declaredLength - 4
+    let payloadEnd = payloadStart + declaredLength - 4
     guard payloadEnd <= frame.count else { return WhoopFrameCheck(ok: false, declaredLength: declaredLength) }
     let payload = Array(frame[payloadStart..<payloadEnd])
-    let stored = UInt32(frame[payloadEnd]) | (UInt32(frame[payloadEnd+1]) << 8)
-        | (UInt32(frame[payloadEnd+2]) << 16) | (UInt32(frame[payloadEnd+3]) << 24)
+    let stored = UInt32(frame[payloadEnd]) | (UInt32(frame[payloadEnd + 1]) << 8)
+        | (UInt32(frame[payloadEnd + 2]) << 16) | (UInt32(frame[payloadEnd + 3]) << 24)
     return WhoopFrameCheck(ok: whoopCRC32(payload) == stored, declaredLength: declaredLength)
 }
 
-func verifyWhoopFrame(_ frame: [UInt8], family: WhoopDeviceFamily) -> WhoopFrameCheck {
+public func verifyWhoopFrame(_ frame: [UInt8], family: WhoopDeviceFamily) -> WhoopFrameCheck {
     switch family {
     case .whoop4: return verifyWhoopFrame4(frame)
     case .whoop5: return verifyWhoopFrame5(frame)
     }
 }
 
-// MARK: - Reassembler
-
 /// Reassembles fragmented BLE notifications into complete, CRC-verified WHOOP frames.
-/// Works for both WHOOP 4.0 (CRC8 header) and 5.0 (CRC16-Modbus header) by reading
-/// the declared frame length before buffering.
-struct WhoopReassembler {
+public struct WhoopReassembler: Sendable {
     private var buffer: [UInt8] = []
-    let family: WhoopDeviceFamily
+    public let family: WhoopDeviceFamily
 
-    /// Number of bytes currently buffered (waiting for a complete frame).
-    var bufferCount: Int { buffer.count }
+    public var bufferCount: Int { buffer.count }
 
-    /// Declared total byte count of the next frame, if we have enough header bytes to know it.
-    var declaredTotal: Int? {
+    public var declaredTotal: Int? {
         guard let sofIdx = buffer.firstIndex(of: 0xAA), sofIdx == 0 else { return nil }
         switch family {
         case .whoop4:
@@ -144,17 +121,16 @@ struct WhoopReassembler {
         }
     }
 
-    init(family: WhoopDeviceFamily) {
+    public init(family: WhoopDeviceFamily) {
         self.family = family
     }
 
-    /// Feed a raw BLE notification chunk; returns complete verified frames and count of CRC-failed discards.
-    mutating func feed(_ chunk: [UInt8]) -> (frames: [[UInt8]], crcFailures: Int) {
+    public mutating func feed(_ chunk: [UInt8]) -> (frames: [[UInt8]], crcFailures: Int) {
         buffer.append(contentsOf: chunk)
         return drain()
     }
 
-    mutating func reset() { buffer.removeAll() }
+    public mutating func reset() { buffer.removeAll() }
 
     private mutating func drain() -> (frames: [[UInt8]], crcFailures: Int) {
         var frames: [[UInt8]] = []
@@ -168,14 +144,12 @@ struct WhoopReassembler {
         return (frames, crcFailures)
     }
 
-    /// Returns (frame, bytesConsumed, crcFailed) or nil if there are not enough bytes yet.
-    /// frame is nil if the candidate was corrupt (bytes consumed and discarded).
     private func nextFrame() -> (frame: [UInt8]?, consumed: Int, crcFailed: Bool)? {
-        guard !buffer.isEmpty else { return nil }  // empty buffer — nothing to parse
+        guard !buffer.isEmpty else { return nil }
         guard let sofIdx = buffer.firstIndex(of: 0xAA) else {
-            return (nil, buffer.count, false)  // no SOF anywhere — discard everything
+            return (nil, buffer.count, false)
         }
-        if sofIdx > 0 { return (nil, sofIdx, false) }  // skip bytes before SOF
+        if sofIdx > 0 { return (nil, sofIdx, false) }
 
         switch family {
         case .whoop4:

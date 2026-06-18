@@ -125,8 +125,8 @@
 			);
 			name = Aceso;
 			packageProductDependencies = (
+				3C4876202FDA500000B5CFE0 /* WhoopSDK */,
 			);
-			productName = Aceso;
 			productReference = 3C01D6852FDA164900AB51BF /* Aceso.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -212,6 +212,9 @@
 			productRefGroup = 3C01D6862FDA164900AB51BF /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				3C48761F2FDA500000B5CFE0 /* XCLocalSwiftPackageReference "whoop-sdk" */,
+			);
 			targets = (
 				3C01D6842FDA164900AB51BF /* Aceso */,
 				3C01D6912FDA164A00AB51BF /* AcesoTests */,
@@ -219,6 +222,21 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		3C48761F2FDA500000B5CFE0 /* XCLocalSwiftPackageReference "whoop-sdk" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../packages/whoop-sdk;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		3C4876202FDA500000B5CFE0 /* WhoopSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3C48761F2FDA500000B5CFE0 /* XCLocalSwiftPackageReference "whoop-sdk" */;
+			productName = WhoopSDK;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3C01D6832FDA164900AB51BF /* Resources */ = {

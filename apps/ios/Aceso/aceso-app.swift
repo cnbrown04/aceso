@@ -1,8 +1,9 @@
 import SwiftUI
+import WhoopSDK
 
 @main
 struct AcesoApp: App {
-    @State private var whoopClient = WhoopBLEClient(family: .whoop4)
+    @State private var whoopClient = WhoopSDK.makeBLEClient(family: .whoop4)
 
     init() {
         AcesoTheme.configureAppearance()
