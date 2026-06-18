@@ -8,7 +8,7 @@ func init() {
 
 type templateAddon struct{}
 
-func (a *templateAddon) Register() error {
+func (a *templateAddon) Register(_ *server.ServerDeps) error {
 	// wire up routes, services, etc.
 	return nil
 }

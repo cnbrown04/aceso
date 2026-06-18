@@ -61,11 +61,17 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
     nonisolated(unsafe) private var historicalPacketCountBuffer: Int = 0
     nonisolated(unsafe) private var historicalIdleWorkItem: DispatchWorkItem?
 
+    private static let centralRestoreIdentifier = "dev.aceso.whoop.central"
+
     public init(family: WhoopDeviceFamily = .whoop4) {
         self.family = family
         self.reassembler = WhoopReassembler(family: family)
         super.init()
-        central = CBCentralManager(delegate: self, queue: bleQueue)
+        central = CBCentralManager(
+            delegate: self,
+            queue: bleQueue,
+            options: [CBCentralManagerOptionRestoreIdentifierKey: Self.centralRestoreIdentifier]
+        )
     }
 
     public func connect() {
@@ -452,6 +458,23 @@ public final class WhoopBLEClient: NSObject, @unchecked Sendable {
 }
 
 extension WhoopBLEClient: CBCentralManagerDelegate {
+    nonisolated public func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
+        Task { @MainActor in
+            guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
+                  let restored = peripherals.first else { return }
+            self.preparePeripheral(restored)
+            switch restored.state {
+            case .connected:
+                self.connectionState = .connected
+                restored.discoverServices(self.allServiceUUIDs())
+            case .connecting:
+                self.connectionState = .connecting
+            default:
+                self.connectionState = .idle
+            }
+        }
+    }
+
     nonisolated public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
             guard central.state == .poweredOn else {

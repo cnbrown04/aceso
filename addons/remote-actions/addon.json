@@ -1,0 +1,14 @@
+{
+  "id": "remote-actions",
+  "name": "Remote Actions",
+  "version": "0.1.0",
+  "description": "Send authenticated commands from the web dashboard to the iOS app for WHOOP haptics and alarms.",
+  "platforms": ["ios", "web", "server"],
+  "hooks": {
+    "ios": "Registers RemoteActionsCoordinator with AddonLoader; maintains device WebSocket and executes allowlisted BLE commands.",
+    "web": "Adds remote-actions panel with device picker, haptic controls, and live command status.",
+    "server": "Registers POST /api/commands, device registry, and WebSocket delivery via internal/live hub."
+  },
+  "aceso": "0.1.0",
+  "author": ""
+}
