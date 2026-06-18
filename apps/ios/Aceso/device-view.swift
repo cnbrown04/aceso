@@ -1,4 +1,5 @@
 import SwiftUI
+import RemoteActionsAddon
 import WhoopSDK
 
 struct DeviceView: View {
@@ -43,6 +44,10 @@ struct DeviceView: View {
                     whoop.resyncHistoricalData()
                 }
                 .disabled(whoop.connectionState != .connected || whoop.isHistoricalSyncing)
+
+                NavigationLink("Remote Actions") {
+                    RemoteActionsSettingsView()
+                }
             }
         }
         .acesoListBackground()

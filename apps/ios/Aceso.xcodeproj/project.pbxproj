@@ -126,6 +126,7 @@
 			name = Aceso;
 			packageProductDependencies = (
 				3C4876202FDA500000B5CFE0 /* WhoopSDK */,
+				3C48RA012FDA600000B5CFE0 /* RemoteActionsAddon */,
 			);
 			productReference = 3C01D6852FDA164900AB51BF /* Aceso.app */;
 			productType = "com.apple.product-type.application";
@@ -214,6 +215,7 @@
 			projectRoot = "";
 			packageReferences = (
 				3C48761F2FDA500000B5CFE0 /* XCLocalSwiftPackageReference "whoop-sdk" */,
+				3C48RA002FDA600000B5CFE0 /* XCLocalSwiftPackageReference "remote-actions" */,
 			);
 			targets = (
 				3C01D6842FDA164900AB51BF /* Aceso */,
@@ -228,6 +230,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../../packages/whoop-sdk;
 		};
+		3C48RA002FDA600000B5CFE0 /* XCLocalSwiftPackageReference "remote-actions" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../addons/remote-actions/ios;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -235,6 +241,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 3C48761F2FDA500000B5CFE0 /* XCLocalSwiftPackageReference "whoop-sdk" */;
 			productName = WhoopSDK;
+		};
+		3C48RA012FDA600000B5CFE0 /* RemoteActionsAddon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3C48RA002FDA600000B5CFE0 /* XCLocalSwiftPackageReference "remote-actions" */;
+			productName = RemoteActionsAddon;
 		};
 /* End XCSwiftPackageProductDependency section */
 

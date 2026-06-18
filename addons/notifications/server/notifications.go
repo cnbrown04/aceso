@@ -8,7 +8,7 @@ func init() {
 
 type notificationsAddon struct{}
 
-func (a *notificationsAddon) Register() error {
+func (a *notificationsAddon) Register(_ *server.ServerDeps) error {
 	// register webhook handler: POST /api/webhooks/notifications
 	return nil
 }
